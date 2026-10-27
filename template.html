@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>セキュリティ情報ボード</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f3f3f0; --surface: #fcfcfb; --text: #0b0b0b; --text2: #52514e; --muted: #7a7974;
+  --line: #e1e0d9; --chip: #ecebe6; --link: #1f5fb0;
+  --critical: #d03b3b; --warning: #fab219; --info: #9a9890; --good: #0ca30c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --text: #f0efec; --text2: #c3c2b7; --muted: #8f8e88;
+    --line: #2c2c2a; --chip: #2a2a28; --link: #7fb2f0; --info: #6f6e69;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 system-ui, -apple-system, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 16px 14px 48px; }
+header h1 { font-size: 20px; margin: 0; }
+header .sub { color: var(--text2); font-size: 13px; }
+.mock { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 99px;
+  background: var(--chip); color: var(--text2); margin-left: 6px; vertical-align: 3px; }
+
+/* 要約タイル */
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.tile:hover { border-color: var(--text2); }
+.tile .n { font-size: 26px; font-weight: 700; line-height: 1.2; }
+.tile .l { font-size: 12px; color: var(--text2); }
+@media (max-width: 560px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+
+/* 絞り込み */
+.filters { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0; display: flex;
+  flex-wrap: wrap; gap: 6px; align-items: center; border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; background: var(--chip); border-radius: 99px; padding: 2px; max-width: 100%;
+  overflow-x: auto; scrollbar-width: none; }
+.seg button { flex: none; }
+.seg button { border: 0; background: transparent; color: var(--text2); font: inherit; font-size: 13px;
+  padding: 4px 11px; border-radius: 99px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 600;
+  box-shadow: 0 0 0 1px var(--line); }
+.filters input, .filters select { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.filters input { flex: 1; min-width: 0; width: 100%; }
+.filters select { max-width: 48%; }
+.count { color: var(--muted); font-size: 12px; margin: 10px 2px 6px; }
+
+/* カード */
+.day { font-size: 13px; font-weight: 600; color: var(--text2); margin: 18px 2px 6px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-left: 5px solid var(--info);
+  border-radius: 10px; padding: 11px 14px; margin-bottom: 8px; }
+.card.l3 { border-left-color: var(--critical); }
+.card.l2 { border-left-color: var(--warning); }
+.card h2 { font-size: 15.5px; margin: 2px 0 4px; line-height: 1.45; overflow-wrap: anywhere; }
+.card { overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12px; color: var(--text2); }
+.badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px; border-radius: 99px;
+  font-size: 12px; font-weight: 600; white-space: nowrap; }
+.b3 { background: var(--critical); color: #fff; }
+.b2 { background: var(--warning); color: #0b0b0b; }
+.b1 { background: var(--chip); color: var(--text2); }
+.bx { background: transparent; color: var(--critical); box-shadow: inset 0 0 0 1.5px var(--critical); }
+.kind { background: var(--chip); color: var(--text2); font-weight: 500; }
+.summary { font-size: 13.5px; color: var(--text2); margin: 6px 0 2px; }
+.srcs { margin-top: 6px; font-size: 12.5px; }
+.srcs a.s { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 8px; border-radius: 6px;
+  background: var(--chip); color: var(--text); }
+.srcs a.s small { color: var(--text2); }
+.cves { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.cves a { color: var(--muted); margin-right: 6px; }
+details { margin-top: 6px; font-size: 13px; }
+details summary { cursor: pointer; color: var(--link); }
+details ul { margin: 6px 0 0; padding-left: 18px; }
+details li { margin: 2px 0; }
+.empty { text-align: center; color: var(--muted); padding: 40px 0; }
+
+footer { margin-top: 32px; font-size: 12.5px; color: var(--text2); }
+footer h3 { font-size: 14px; color: var(--text); margin: 18px 0 6px; }
+footer table { border-collapse: collapse; width: 100%; }
+footer td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
+footer dt { font-weight: 600; color: var(--text); margin-top: 6px; }
+footer dd { margin: 0 0 4px 0; }
+.ok { color: var(--good); font-weight: 600; } .ng { color: var(--critical); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🛡️ セキュリティ情報ボード<span class="mock">試作版</span></h1>
+    <div class="sub" id="sub"></div>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="filters">
+    <div class="seg" id="f-level"></div>
+    <div class="seg" id="f-kind"></div>
+    <select id="f-src" aria-label="情報源"></select>
+    <select id="f-days" aria-label="期間"></select>
+    <input id="f-q" type="search" placeholder="キーワード・CVE 番号で検索">
+  </div>
+  <div class="count" id="count"></div>
+  <main id="list"></main>
+
+  <footer>
+    <h3>情報源の取得状況</h3>
+    <table id="status"></table>
+    <h3>このページについて</h3>
+    <p>公的機関・メーカー・ニュースサイトが公開している情報の題名とリンクを、自動で集めて整理したものです（1 時間ごとに更新）。
+    重要度の判定や、同じ話題をまとめる処理は機械的に行っているため、誤りを含むことがあります。対応の判断は、必ずリンク先の出典で確認してください。</p>
+    <h3>用語</h3>
+    <dl>
+      <dt>🔴 緊急</dt><dd>IPA・JPCERT/CC が注意喚起したもの、または実際に攻撃に使われていると確認されたもの。すぐ確認する。</dd>
+      <dt>🟡 注意</dt><dd>脆弱性の公表（JVN・Microsoft など）や、事件の詳しいまとめ（piyolog）。その日のうちに目を通す。</dd>
+      <dt>⚪ 参考</dt><dd>ニュース記事。まとめて流し読みでよい。</dd>
+      <dt>攻撃に悪用済み</dt><dd>米国政府（CISA）の「悪用が確認された脆弱性の一覧（KEV）」に載ったもの、または記事で悪用が報じられたもの。</dd>
+      <dt>CVE 番号</dt><dd>脆弱性ごとに世界共通で振られる識別番号。同じ番号の情報を 1 枚のカードにまとめている。</dd>
+      <dt>悪用予測（EPSS）</dt><dd>今後 30 日以内に攻撃に使われる確率の推定値（FIRST が毎日公表）。</dd>
+      <dt>米政府の対応期限</dt><dd>CISA が米国の政府機関に修正を義務づけた期限。急ぎ度の目安になる。</dd>
+    </dl>
+  </footer>
+</div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const LV = {3: ["🔴", "緊急", "b3"], 2: ["🟡", "注意", "b2"], 1: ["⚪", "参考", "b1"]};
+const KIND = {vuln: "脆弱性", incident: "事件・事故", news: "ニュース"};
+const state = {level: "all", kind: "all", src: "all", days: DATA.days, q: ""};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const now = new Date(DATA.generated);
+const fmtDay = d => d.toLocaleDateString("ja-JP", {month: "numeric", day: "numeric", weekday: "short"});
+const fmtTime = d => d.toLocaleString("ja-JP", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
+const daysAgo = iso => (now - new Date(iso)) / 864e5;
+
+function seg(el, key, opts) {
+  el.innerHTML = opts.map(([v, l]) => `<button data-v="${v}" aria-pressed="${state[key] == v}">${l}</button>`).join("");
+  el.onclick = e => { const b = e.target.closest("button"); if (!b) return; state[key] = b.dataset.v; sync(); };
+}
+function sync() {
+  for (const [id, key] of [["f-level", "level"], ["f-kind", "kind"]])
+    $(id).querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v == state[key]));
+  $("f-src").value = state.src; $("f-days").value = state.days;
+  render();
+}
+
+function match(t) {
+  if (state.level != "all" && t.level != +state.level) return false;
+  if (state.kind == "exploited" ? !t.exploited : state.kind != "all" && t.kind != state.kind) return false;
+  if (state.src != "all" && !t.sources.some(s => s.name == state.src)) return false;
+  if (daysAgo(t.date) > +state.days) return false;
+  if (state.q) {
+    const hay = [t.title, t.summary, ...t.cves, ...t.en, ...t.sources.map(s => s.title),
+      ...(t.digest || []).map(d => d.title + d.cve)].join(" ").toLowerCase();
+    if (!state.q.toLowerCase().split(/\s+/).every(w => hay.includes(w))) return false;
+  }
+  return true;
+}
+
+function card(t) {
+  const [ic, lb, cls] = LV[t.level];
+  const badges = [`<span class="badge ${cls}">${ic} ${lb}</span>`, `<span class="badge kind">${KIND[t.kind]}</span>`];
+  if (t.exploited) badges.push(`<span class="badge bx">⚠ 攻撃に悪用済み</span>`);
+  if (t.ransomware) badges.push(`<span class="badge bx">ランサムウェアで使用</span>`);
+  if (t.epss != null && t.epss >= 0.01) badges.push(`<span class="badge kind" title="今後30日に悪用される確率の推定">悪用予測 ${(t.epss * 100).toFixed(t.epss < 0.1 ? 1 : 0)}%</span>`);
+  if (t.kev_due) badges.push(`<span class="badge kind">米政府の対応期限 ${t.kev_due.slice(5).replace("-", "/")}</span>`);
+  const srcs = t.sources.map(s => `<a class="s" href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title)}">${esc(s.name)}${s.label ? ` <small>${esc(s.label)}</small>` : ""}</a>`).join("");
+  const cves = t.cves.length ? `<div class="cves">${t.cves.slice(0, 8).map(c => `<a href="https://nvd.nist.gov/vuln/detail/${c}" target="_blank" rel="noopener">${c}</a>`).join("")}${t.cves.length > 8 ? `ほか ${t.cves.length - 8} 件` : ""}</div>` : "";
+  const en = t.en.length ? `<div class="cves">原文: ${t.en.map(esc).join(" / ")}</div>` : "";
+  const digest = t.digest && t.digest.length ? `<details><summary>遠隔からのコード実行の脆弱性 ${t.digest.length} 件を見る</summary><ul>${t.digest.map(d => `<li><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a> <small>${d.cve}</small></li>`).join("")}</ul></details>` : "";
+  return `<article class="card l${t.level}">
+    <div class="meta">${badges.join("")}<span>${fmtTime(new Date(t.date))}</span></div>
+    <h2><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.title)}</a></h2>
+    ${t.summary ? `<div class="summary">${esc(t.summary)}</div>` : ""}
+    <div class="srcs">${t.sources.length > 1 ? `<small>${t.sources.length} 件の情報源: </small>` : ""}${srcs}</div>
+    ${cves}${en}${digest}
+  </article>`;
+}
+
+function render() {
+  // 日ごとに、重要度の高い順 → 新しい順に並べる
+  const list = DATA.topics.filter(match).sort((a, b) =>
+    fmtDay(new Date(b.date)) == fmtDay(new Date(a.date)) ? b.level - a.level || (b.date > a.date ? 1 : -1) : (b.date > a.date ? 1 : -1));
+  $("count").textContent = `${list.length} 件を表示（全 ${DATA.topics.length} 件）`;
+  if (!list.length) { $("list").innerHTML = `<div class="empty">条件に合う情報はありません</div>`; return; }
+  let html = "", last = "";
+  for (const t of list) {
+    const d = fmtDay(new Date(t.date));
+    if (d != last) { html += `<div class="day">${d}</div>`; last = d; }
+    html += card(t);
+  }
+  $("list").innerHTML = html;
+}
+
+function init() {
+  const g = new Date(DATA.generated);
+  $("sub").textContent = `最終更新 ${g.toLocaleString("ja-JP")}・過去 ${DATA.days} 日分・${DATA.status.filter(s => s.ok).length}/${DATA.status.length} 情報源`;
+  const T = DATA.topics, recent = T.filter(t => daysAgo(t.date) <= 3);
+  const tiles = [
+    ["🔴 緊急（3日以内）", recent.filter(t => t.level == 3).length, {level: "3", kind: "all", days: "3"}],
+    ["⚠ 悪用済み", T.filter(t => t.exploited).length, {level: "all", kind: "exploited", days: DATA.days}],
+    ["脆弱性", T.filter(t => t.kind == "vuln").length, {level: "all", kind: "vuln", days: DATA.days}],
+    ["事件・事故", T.filter(t => t.kind == "incident").length, {level: "all", kind: "incident", days: DATA.days}],
+  ];
+  $("tiles").innerHTML = tiles.map(([l, n], i) => `<button class="tile" data-i="${i}"><div class="n">${n}</div><div class="l">${l}</div></button>`).join("");
+  $("tiles").onclick = e => { const b = e.target.closest(".tile"); if (!b) return; Object.assign(state, tiles[b.dataset.i][2], {src: "all", q: ""}); $("f-q").value = ""; sync(); };
+
+  seg($("f-level"), "level", [["all", "すべて"], ["3", "🔴 緊急"], ["2", "🟡 注意"], ["1", "⚪ 参考"]]);
+  seg($("f-kind"), "kind", [["all", "全種類"], ["exploited", "⚠ 悪用済み"], ["vuln", "脆弱性"], ["incident", "事件・事故"], ["news", "ニュース"]]);
+  $("f-src").innerHTML = `<option value="all">情報源: すべて</option>` + DATA.status.filter(s => s.name != "FIRST EPSS").map(s => `<option>${esc(s.name)}</option>`).join("");
+  $("f-days").innerHTML = [1, 3, 7, DATA.days].map(d => `<option value="${d}">${d == 1 ? "24時間" : d + "日"}</option>`).join("");
+  $("f-src").onchange = e => { state.src = e.target.value; render(); };
+  $("f-days").onchange = e => { state.days = e.target.value; render(); };
+  $("f-q").oninput = e => { state.q = e.target.value.trim(); render(); };
+
+  $("status").innerHTML = DATA.status.map(s => `<tr><td><a href="${esc(s.home)}" target="_blank" rel="noopener">${esc(s.name)}</a></td><td>${s.ok ? `<span class="ok">✓ 取得</span> ${s.count} 件` : `<span class="ng">✕ 失敗</span> ${esc(s.error)}`}</td></tr>`).join("")
+    + `<tr><td>JVN iPedia</td><td><span class="ng">✕ 停止中</span> 提供元のサービス停止のため未接続（再開後に追加）</td></tr>`;
+  sync();
+}
+init();
+</script>
+</body>
+</html>
