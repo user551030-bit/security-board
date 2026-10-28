@@ -50,7 +50,7 @@ header .sub { color: var(--text2); font-size: 13px; }
   box-shadow: 0 0 0 1px var(--line); }
 .filters input, .filters select { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 99px;
   border: 1px solid var(--line); background: var(--surface); color: var(--text); }
-.filters input { flex: 1; min-width: 0; width: 100%; }
+#f-q { flex: 1; min-width: 0; width: 100%; }
 .filters select { max-width: 48%; }
 .count { color: var(--muted); font-size: 12px; margin: 10px 2px 6px; }
 
@@ -83,6 +83,25 @@ details ul { margin: 6px 0 0; padding-left: 18px; }
 details li { margin: 2px 0; }
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
 
+/* 期間指定 */
+.range { display: none; width: 100%; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.range.on { display: flex; }
+.range input[type="date"] { font: inherit; font-size: 14px; padding: 4px 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.range button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 99px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text2); }
+.range .hint { width: 100%; font-size: 11.5px; color: var(--muted); }
+.warn { color: var(--critical); }
+
+/* ページ切り替え */
+.pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; margin: 14px 0; }
+.pager:empty { display: none; }
+.pager button { min-width: 38px; height: 38px; padding: 0 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.pager button[aria-current="page"] { background: var(--text); color: var(--surface); border-color: var(--text); font-weight: 700; }
+.pager button:disabled { opacity: .35; cursor: default; }
+.pager .gap { min-width: 20px; text-align: center; color: var(--muted); }
+
 footer { margin-top: 32px; font-size: 12.5px; color: var(--text2); }
 footer h3 { font-size: 14px; color: var(--text); margin: 18px 0 6px; }
 footer table { border-collapse: collapse; width: 100%; }
@@ -107,9 +126,18 @@ footer dd { margin: 0 0 4px 0; }
     <select id="f-src" aria-label="情報源"></select>
     <select id="f-days" aria-label="期間"></select>
     <input id="f-q" type="search" placeholder="キーワード・CVE 番号で検索">
+    <div class="range" id="f-range">
+      <input type="date" id="f-from" aria-label="開始日">
+      <span>〜</span>
+      <input type="date" id="f-to" aria-label="終了日">
+      <button type="button" id="f-clear">クリア</button>
+      <div class="hint">片方だけでも指定できます（開始日だけ → その日以降、終了日だけ → その日以前）</div>
+    </div>
   </div>
   <div class="count" id="count"></div>
+  <nav class="pager" id="pager-top" aria-label="ページ"></nav>
   <main id="list"></main>
+  <nav class="pager" id="pager" aria-label="ページ"></nav>
 
   <footer>
     <h3>情報源の取得状況</h3>
@@ -134,7 +162,8 @@ footer dd { margin: 0 0 4px 0; }
 const DATA = /*__DATA__*/null;
 const LV = {3: ["🔴", "緊急", "b3"], 2: ["🟡", "注意", "b2"], 1: ["⚪", "参考", "b1"]};
 const KIND = {vuln: "脆弱性", incident: "事件・事故", news: "ニュース"};
-const state = {level: "all", kind: "all", src: "all", days: DATA.days, q: ""};
+const PER_PAGE = 30;
+const state = {level: "all", kind: "all", src: "all", days: String(DATA.days), from: "", to: "", q: "", page: 1};
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const now = new Date(DATA.generated);
@@ -146,10 +175,13 @@ function seg(el, key, opts) {
   el.innerHTML = opts.map(([v, l]) => `<button data-v="${v}" aria-pressed="${state[key] == v}">${l}</button>`).join("");
   el.onclick = e => { const b = e.target.closest("button"); if (!b) return; state[key] = b.dataset.v; sync(); };
 }
+// 絞り込みを変えたら 1 ページ目に戻す
 function sync() {
   for (const [id, key] of [["f-level", "level"], ["f-kind", "kind"]])
     $(id).querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v == state[key]));
   $("f-src").value = state.src; $("f-days").value = state.days;
+  $("f-range").classList.toggle("on", state.days == "range");
+  state.page = 1;
   render();
 }
 
@@ -157,7 +189,11 @@ function match(t) {
   if (state.level != "all" && t.level != +state.level) return false;
   if (state.kind == "exploited" ? !t.exploited : state.kind != "all" && t.kind != state.kind) return false;
   if (state.src != "all" && !t.sources.some(s => s.name == state.src)) return false;
-  if (daysAgo(t.date) > +state.days) return false;
+  if (state.days == "range") {
+    const d = t.date.slice(0, 10);  // 日本時間の日付（YYYY-MM-DD）
+    if (state.from && d < state.from) return false;
+    if (state.to && d > state.to) return false;
+  } else if (state.days != "all" && daysAgo(t.date) > +state.days) return false;
   if (state.q) {
     const hay = [t.title, t.summary, ...t.cves, ...t.en, ...t.sources.map(s => s.title),
       ...(t.digest || []).map(d => d.title + d.cve)].join(" ").toLowerCase();
@@ -190,10 +226,21 @@ function render() {
   // 日ごとに、重要度の高い順 → 新しい順に並べる
   const list = DATA.topics.filter(match).sort((a, b) =>
     fmtDay(new Date(b.date)) == fmtDay(new Date(a.date)) ? b.level - a.level || (b.date > a.date ? 1 : -1) : (b.date > a.date ? 1 : -1));
-  $("count").textContent = `${list.length} 件を表示（全 ${DATA.topics.length} 件）`;
-  if (!list.length) { $("list").innerHTML = `<div class="empty">条件に合う情報はありません</div>`; return; }
+  const pages = Math.max(1, Math.ceil(list.length / PER_PAGE));
+  state.page = Math.min(Math.max(1, state.page), pages);
+  const start = (state.page - 1) * PER_PAGE, shown = list.slice(start, start + PER_PAGE);
+  const badRange = state.days == "range" && state.from && state.to && state.from > state.to;
+  $("count").innerHTML = badRange
+    ? `<span class="warn">開始日が終了日より後になっています</span>`
+    : list.length > PER_PAGE
+      ? `${list.length} 件中 ${start + 1}〜${start + shown.length} 件目を表示（${state.page} / ${pages} ページ）`
+      : `${list.length} 件を表示（全 ${DATA.topics.length} 件）`;
+  const pager = pagerHtml(pages);
+  $("pager-top").innerHTML = pager; $("pager").innerHTML = pager;
+  saveHash();
+  if (!shown.length) { $("list").innerHTML = `<div class="empty">条件に合う情報はありません</div>`; return; }
   let html = "", last = "";
-  for (const t of list) {
+  for (const t of shown) {
     const d = fmtDay(new Date(t.date));
     if (d != last) { html += `<div class="day">${d}</div>`; last = d; }
     html += card(t);
@@ -201,30 +248,74 @@ function render() {
   $("list").innerHTML = html;
 }
 
+// 「前へ」「次へ」とページ番号（多いときは 1 … 4 5 6 … 20 のように省略）
+function pagerHtml(pages) {
+  if (pages <= 1) return "";
+  const p = state.page, nums = [];
+  for (let i = 1; i <= pages; i++)
+    if (i == 1 || i == pages || Math.abs(i - p) <= 2) nums.push(i);
+    else if (nums[nums.length - 1] != "…") nums.push("…");
+  return `<button data-p="${p - 1}" ${p == 1 ? "disabled" : ""}>‹ 前へ</button>`
+    + nums.map(n => n == "…" ? `<span class="gap">…</span>`
+      : `<button data-p="${n}" ${n == p ? 'aria-current="page"' : ""}>${n}</button>`).join("")
+    + `<button data-p="${p + 1}" ${p == pages ? "disabled" : ""}>次へ ›</button>`;
+}
+function goPage(e) {
+  const b = e.target.closest("button[data-p]");
+  if (!b || b.disabled) return;
+  state.page = +b.dataset.p;
+  render();
+  // 一覧の先頭へ戻る（上に固定された絞り込み欄の分だけずらす）
+  const top = $("count").getBoundingClientRect().top + scrollY - document.querySelector(".filters").offsetHeight - 8;
+  scrollTo({top, behavior: "smooth"});
+}
+
 function init() {
   const g = new Date(DATA.generated);
-  $("sub").textContent = `最終更新 ${g.toLocaleString("ja-JP")}・過去 ${DATA.days} 日分・${DATA.status.filter(s => s.ok).length}/${DATA.status.length} 情報源`;
-  const T = DATA.topics, recent = T.filter(t => daysAgo(t.date) <= 3);
+  const first = DATA.topics.reduce((m, t) => t.date < m ? t.date : m, DATA.generated).slice(0, 10);
+  const today = DATA.generated.slice(0, 10);
+  $("sub").textContent = `最終更新 ${g.toLocaleString("ja-JP")}・${first.replaceAll("-", "/")} 以降の ${DATA.topics.length} 件・${DATA.status.filter(s => s.ok).length}/${DATA.status.length} 情報源`;
+  const r3 = DATA.topics.filter(t => daysAgo(t.date) <= 3), r7 = DATA.topics.filter(t => daysAgo(t.date) <= 7);
   const tiles = [
-    ["🔴 緊急（3日以内）", recent.filter(t => t.level == 3).length, {level: "3", kind: "all", days: "3"}],
-    ["⚠ 悪用済み", T.filter(t => t.exploited).length, {level: "all", kind: "exploited", days: DATA.days}],
-    ["脆弱性", T.filter(t => t.kind == "vuln").length, {level: "all", kind: "vuln", days: DATA.days}],
-    ["事件・事故", T.filter(t => t.kind == "incident").length, {level: "all", kind: "incident", days: DATA.days}],
+    ["🔴 緊急（3日以内）", r3.filter(t => t.level == 3).length, {level: "3", kind: "all", days: "3"}],
+    ["⚠ 悪用済み（7日以内）", r7.filter(t => t.exploited).length, {level: "all", kind: "exploited", days: "7"}],
+    ["脆弱性（7日以内）", r7.filter(t => t.kind == "vuln").length, {level: "all", kind: "vuln", days: "7"}],
+    ["事件・事故（7日以内）", r7.filter(t => t.kind == "incident").length, {level: "all", kind: "incident", days: "7"}],
   ];
   $("tiles").innerHTML = tiles.map(([l, n], i) => `<button class="tile" data-i="${i}"><div class="n">${n}</div><div class="l">${l}</div></button>`).join("");
-  $("tiles").onclick = e => { const b = e.target.closest(".tile"); if (!b) return; Object.assign(state, tiles[b.dataset.i][2], {src: "all", q: ""}); $("f-q").value = ""; sync(); };
+  $("tiles").onclick = e => { const b = e.target.closest(".tile"); if (!b) return; Object.assign(state, tiles[b.dataset.i][2], {src: "all", q: "", from: "", to: ""}); $("f-q").value = $("f-from").value = $("f-to").value = ""; sync(); };
 
   seg($("f-level"), "level", [["all", "すべて"], ["3", "🔴 緊急"], ["2", "🟡 注意"], ["1", "⚪ 参考"]]);
   seg($("f-kind"), "kind", [["all", "全種類"], ["exploited", "⚠ 悪用済み"], ["vuln", "脆弱性"], ["incident", "事件・事故"], ["news", "ニュース"]]);
   $("f-src").innerHTML = `<option value="all">情報源: すべて</option>` + DATA.status.filter(s => s.name != "FIRST EPSS").map(s => `<option>${esc(s.name)}</option>`).join("");
-  $("f-days").innerHTML = [1, 3, 7, DATA.days].map(d => `<option value="${d}">${d == 1 ? "24時間" : d + "日"}</option>`).join("");
-  $("f-src").onchange = e => { state.src = e.target.value; render(); };
-  $("f-days").onchange = e => { state.days = e.target.value; render(); };
-  $("f-q").oninput = e => { state.q = e.target.value.trim(); render(); };
-
+  const presets = [...new Set([1, 3, 7, 14, 30, DATA.days])].sort((a, b) => a - b);
+  $("f-days").innerHTML = presets.map(d => `<option value="${d}">${d == 1 ? "24時間" : d + "日"}</option>`).join("")
+    + `<option value="all">すべての期間</option><option value="range">📅 日付を指定</option>`;
+  $("f-src").onchange = e => { state.src = e.target.value; sync(); };
+  $("f-days").onchange = e => { state.days = e.target.value; sync(); };
+  $("f-q").oninput = e => { state.q = e.target.value.trim(); sync(); };
+  for (const id of ["f-from", "f-to"]) {
+    $(id).min = first; $(id).max = today;
+    $(id).onchange = () => { state.from = $("f-from").value; state.to = $("f-to").value; sync(); };
+  }
+  $("f-clear").onclick = () => { $("f-from").value = $("f-to").value = ""; state.from = state.to = ""; sync(); };
+  $("pager-top").onclick = goPage; $("pager").onclick = goPage;
   $("status").innerHTML = DATA.status.map(s => `<tr><td><a href="${esc(s.home)}" target="_blank" rel="noopener">${esc(s.name)}</a></td><td>${s.ok ? `<span class="ok">✓ 取得</span> ${s.count} 件` : `<span class="ng">✕ 失敗</span> ${esc(s.error)}`}</td></tr>`).join("")
     + `<tr><td>JVN iPedia</td><td><span class="ng">✕ 停止中</span> 提供元のサービス停止のため未接続（再開後に追加）</td></tr>`;
+
+  // URL の # 以降に絞り込みを残す（ブックマーク・共有用。例: #days=range&from=2026-10-20&page=2）
+  const h = new URLSearchParams(location.hash.slice(1));
+  for (const k of ["level", "kind", "src", "days", "from", "to", "q"]) if (h.has(k)) state[k] = h.get(k);
+  $("f-from").value = state.from; $("f-to").value = state.to; $("f-q").value = state.q;
+  const page = +h.get("page") || 1;
   sync();
+  if (page > 1) { state.page = page; render(); }
+}
+function saveHash() {
+  const p = new URLSearchParams();
+  const def = {level: "all", kind: "all", src: "all", days: String(DATA.days), from: "", to: "", q: "", page: 1};
+  for (const k in def) if (String(state[k]) != String(def[k])) p.set(k, state[k]);
+  history.replaceState(null, "", p.toString() ? "#" + p : location.pathname + location.search);
 }
 init();
 </script>

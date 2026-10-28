@@ -9,6 +9,7 @@ import argparse
 import datetime as dt
 import email.utils
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -311,12 +312,11 @@ def cluster(items):
     return list(groups.values())
 
 
-def build_topics(groups):
-    topics, msrc_rest = [], []
+def build_topics(groups, msrc_days):
+    topics = []
     for g in groups:
         if all(x["source"] == "msrc" for x in g):
-            msrc_rest.extend(g)
-            continue
+            continue  # Microsoft 単独のものは日ごとのまとめカードに入る
         g.sort(key=lambda x: (TITLE_ORDER.index(x["source"]), x["date"]))
         head = g[0]
         exploited = any(x.get("exploited") for x in g) or any("悪用" in x["title"] for x in g)
@@ -343,41 +343,87 @@ def build_topics(groups):
                          "label": x.get("label", ""), "title": x["title"], "url": x["url"],
                          "date": x["date"]} for x in sorted(g, key=lambda x: x["date"], reverse=True)],
         })
-    if msrc_rest:
-        topics.append(msrc_digest(msrc_rest))
+    topics.extend(msrc_digest(day) for day in msrc_days.values())
     topics.sort(key=lambda t: t["date"], reverse=True)
     return topics
 
 
-def msrc_digest(items):
-    counts = {}
+def msrc_day_summary(items):
+    """Microsoft の新規公開分を日ごと（日本時間）に集計する。"""
+    days = {}
     for x in items:
-        counts[x["vtype"]] = counts.get(x["vtype"], 0) + 1
-    rce = [x for x in items if x["vtype"] == "遠隔からのコード実行"]
-    breakdown = "、".join(f"{k} {v} 件" for k, v in sorted(counts.items(), key=lambda kv: -kv[1])[:5])
+        days.setdefault(x["date"][:10], []).append(x)
+    out = {}
+    for day, xs in days.items():
+        types = {}
+        for x in xs:
+            types[x["vtype"]] = types.get(x["vtype"], 0) + 1
+        rce = sorted((x for x in xs if x["vtype"] == "遠隔からのコード実行"),
+                     key=lambda x: x["date"], reverse=True)
+        out[day] = {"date": max(x["date"] for x in xs), "count": len(xs), "types": types,
+                    "rce": [{"title": x["title"], "url": x["url"], "cve": x["cves"][0]} for x in rce[:30]]}
+    return out
+
+
+def msrc_digest(day):
+    breakdown = "、".join(f"{k} {v} 件" for k, v in sorted(day["types"].items(), key=lambda kv: -kv[1])[:5])
     return {
-        "title": f"Microsoft 製品の脆弱性 {len(items)} 件が新たに公開",
+        "title": f"Microsoft 製品の脆弱性 {day['count']} 件が新たに公開",
         "url": SOURCES["msrc"]["home"],
-        "date": max(x["date"] for x in items),
-        "level": 2, "kind": "vuln", "exploited": False, "kev_due": None, "ransomware": False,
-        "cves": [], "en": [],
+        "date": day["date"],
+        "level": 2 if day["count"] >= 10 else 1, "kind": "vuln", "exploited": False,
+        "kev_due": None, "ransomware": False, "cves": [], "en": [],
         "summary": f"内訳: {breakdown}。Windows Update などで更新を適用してください。",
-        "digest": [{"title": x["title"], "url": x["url"], "cve": x["cves"][0]}
-                   for x in sorted(rce, key=lambda x: x["date"], reverse=True)[:30]],
+        "digest": day["rce"],
         "sources": [{"id": "msrc", "name": "Microsoft", "label": "まとめ", "title": "Security Update Guide",
-                     "url": SOURCES["msrc"]["home"], "date": max(x["date"] for x in items)}],
+                     "url": SOURCES["msrc"]["home"], "date": day["date"]}],
     }
 
 
-def add_epss(topics, status):
-    cves = sorted({c for t in topics for c in t["cves"]})
-    scores = {}
+# ---- 蓄積（情報源は最近の分しか出さないので、取得した分を貯めていく） ----
+
+def load_history():
+    """公開中のページから前回までの蓄積を読む。取れなければリポジトリ内の控えを使う。"""
+    url = os.environ.get("HISTORY_URL")
+    if url:
+        try:
+            hist = json.loads(fetch(url))
+            print(f"蓄積: 公開ページから {len(hist['items'])} 件", file=sys.stderr)
+            return hist
+        except Exception as e:
+            print(f"蓄積: 公開ページから読めず（{e}）。控えを使う", file=sys.stderr)
+    path = ROOT / "data" / "history.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return {"items": {}, "msrc_days": {}, "epss": {}}
+
+
+def merge_history(hist, fetched):
+    key = lambda x: f"{x['source']}|{x['url']}"
+    msrc = [x for x in fetched if x["source"] == "msrc"]
+    for x in fetched:
+        if x["source"] != "msrc":
+            hist["items"][key(x)] = x  # 同じページの更新は新しい内容で上書き
+    # Microsoft は件数が多いので、他の情報源と同じ CVE のものだけ個別に残す
+    known = {c for x in hist["items"].values() if x["source"] != "msrc" for c in x["cves"]}
+    for x in msrc:
+        if set(x["cves"]) & known:
+            hist["items"][key(x)] = x
+    hist["msrc_days"].update(msrc_day_summary(msrc))
+    return hist
+
+
+def add_epss(topics, hist, status, now):
+    """悪用予測（EPSS）は直近 30 日の話題だけ取り直し、古いものは前回の値を使う。"""
+    recent = now - dt.timedelta(days=30)
+    cves = sorted({c for t in topics if dt.datetime.fromisoformat(t["date"]) >= recent for c in t["cves"]})
+    scores = hist.setdefault("epss", {})
     try:
         for i in range(0, len(cves), 50):
             raw = fetch("https://api.first.org/data/v1/epss?cve=" + ",".join(cves[i:i + 50]))
             for row in json.loads(raw)["data"]:
                 scores[row["cve"]] = float(row["epss"])
-        status.append({"name": "FIRST EPSS", "ok": True, "count": len(scores),
+        status.append({"name": "FIRST EPSS", "ok": True, "count": len(cves),
                        "home": "https://www.first.org/epss/"})
     except Exception as e:  # 取れなくてもページは作る
         status.append({"name": "FIRST EPSS", "ok": False, "error": str(e)[:120],
@@ -390,31 +436,36 @@ def add_epss(topics, status):
 def main():
     sys.stderr.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=14)
+    ap.add_argument("--days", type=int, default=30, help="各情報源から取り込む日数")
+    ap.add_argument("--show", type=int, default=14, help="ページを開いたときの表示日数")
     args = ap.parse_args()
     now = dt.datetime.now(JST)
     since = now - dt.timedelta(days=args.days)
 
-    items, status = [], []
+    fetched, status = [], []
     for sid, src in SOURCES.items():
         try:
             got = PARSERS[sid](fetch(src["url"]), since)
-            items.extend(got)
+            fetched.extend(got)
             status.append({"name": src["name"], "ok": True, "count": len(got), "home": src["home"]})
         except Exception as e:
             status.append({"name": src["name"], "ok": False, "error": str(e)[:120], "home": src["home"]})
         print(f"{src['name']}: {status[-1].get('count', 'NG')}", file=sys.stderr)
 
-    topics = build_topics(cluster(items))
-    add_epss(topics, status)
-    data = {"generated": now.isoformat(), "days": args.days, "topics": topics, "status": status}
+    hist = merge_history(load_history(), fetched)
+    topics = build_topics(cluster(list(hist["items"].values())), hist["msrc_days"])
+    add_epss(topics, hist, status, now)
+    data = {"generated": now.isoformat(), "days": args.show, "topics": topics, "status": status}
 
-    (ROOT / "site").mkdir(exist_ok=True)
+    hist_json = json.dumps(hist, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    for d in ("site", "data"):
+        (ROOT / d).mkdir(exist_ok=True)
+        (ROOT / d / "history.json").write_text(hist_json, encoding="utf-8")
     (ROOT / "site" / "data.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     html = (ROOT / "template.html").read_text(encoding="utf-8")
     html = html.replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
     (ROOT / "site" / "index.html").write_text(html, encoding="utf-8")
-    print(f"話題 {len(topics)} 件 → site/index.html", file=sys.stderr)
+    print(f"蓄積 {len(hist['items'])} 件・話題 {len(topics)} 件 → site/index.html", file=sys.stderr)
 
 
 if __name__ == "__main__":
